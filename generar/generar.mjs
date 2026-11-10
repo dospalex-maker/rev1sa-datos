@@ -20,6 +20,15 @@ const CLAVE_NAP = process.env.NAP_API_KEY || '';
 const fuentes = JSON.parse(readFileSync('generar/fuentes.json', 'utf8')).fuentes;
 const solo = process.argv[2] ? new Set(process.argv[2].split(',').map(Number)) : null;
 const ESTACIONES = JSON.parse(readFileSync('generar/estaciones.json', 'utf8'));
+// Estaciones de Rev1sa (andenes-osm) para «autobuses junto a la estación» (estaciones-buses.json, formato DatosBuses de la app).
+const ESTACIONES_APP = JSON.parse(readFileSync('generar/estaciones-andenes.json', 'utf8'));
+const DESTINOS = {
+  aeropuerto: /aeroporto|aeropuerto|lavacolla|alvedro|peinador|rosal[ií]a de castro/i,
+  hospital: /hospital|chuac|chus\b|chuo|hula|cunqueiro|montecelo|novoa santos|materno|residencia sanitaria|complexo hospitalario/i,
+  universidad: /campus|universidad|universidade|\budc\b|\busc\b|zapateira|elvi[ñn]a/i,
+  centro: /\bcentro\b|praza de galicia|plaza de galicia|porta do sol|alameda|praza de espa[ñn]a/i,
+  autobuses: /estaci[oó]n de autobuses|estaci[oó]n autobuses|esta[cç]i[oó]n de autobuses|intermodal/i,
+};
 
 // Base: el lunes de esta semana (como la app).
 const hoy = new Date();
@@ -155,14 +164,15 @@ async function procesar(f, dir) {
   const ag = await todas(join(dir, 'agency.txt'));
   const agencias = new Map(ag.map((a) => [a.agency_id ?? '', a.agency_name ?? '']));
   const una = ag.length === 1 ? ag[0].agency_name ?? '' : '';
-  const lineas = new Map();
+  const lineas = new Map(), largos = new Map();
   for await (const r of filas(join(dir, 'routes.txt'))) {
     const rt = Number(r.route_type);
+    if (r.route_long_name) largos.set(r.route_id, r.route_long_name);
     lineas.set(r.route_id, [r.route_short_name || r.route_long_name || r.route_id, agencias.get(r.agency_id ?? '') || una || f.p, Number.isFinite(rt) ? rt : 3]);
   }
   // Viajes con servicio en los 70 días
   const viajes = new Map();
-  for await (const t of filas(join(dir, 'trips.txt'))) if (dias.get(t.service_id)?.includes('1')) viajes.set(t.trip_id, { r: t.route_id, s: t.service_id, t: [] });
+  for await (const t of filas(join(dir, 'trips.txt'))) if (dias.get(t.service_id)?.includes('1')) viajes.set(t.trip_id, { r: t.route_id, s: t.service_id, h: t.trip_headsign ?? '', t: [] });
   for await (const st of filas(join(dir, 'stop_times.txt'))) {
     const v = viajes.get(st.trip_id); if (!v || !paradas.has(st.stop_id)) continue;
     const h = st.departure_time || st.arrival_time; if (!/^\d+:\d\d/.test(h)) continue;
@@ -173,7 +183,7 @@ async function procesar(f, dir) {
   for (const v of viajes.values()) {
     if (v.t.length < 2) continue;
     v.t.sort((x, y) => x[0] - y[0]);
-    lista.push({ r: v.r, s: v.s, p: v.t.flatMap((x) => [x[1], x[2]]) });
+    lista.push({ r: v.r, s: v.s, h: v.h, p: v.t.flatMap((x) => [x[1], x[2]]) });
   }
   if (!lista.length) {
     const act = [...dias.values()].filter((x) => x.includes('1')).length;
@@ -182,7 +192,46 @@ async function procesar(f, dir) {
     console.log(`  · sin viajes: servicios ${dias.size} (activos en 70 días: ${act}), calendar ${cal.length} [${fechasCal[0] ?? '-'}…${fechasCal.at(-1) ?? '-'}], calendar_dates ${exc.length} [${fechasExc[0] ?? '-'}…${fechasExc.at(-1) ?? '-'}], viajes activos ${viajes.size}, paradas ${paradas.size}`);
   }
   viajes.clear();
-  return { f, paradas, dias, lineas, viajes: lista, antiguo, fin: finY ? `${finY.slice(0, 4)}-${finY.slice(4, 6)}-${finY.slice(6, 8)}` : undefined };
+  return { f, paradas, dias, lineas, largos, viajes: lista, antiguo, fin: finY ? `${finY.slice(0, 4)}-${finY.slice(4, 6)}-${finY.slice(6, 8)}` : undefined };
+}
+
+// ---------- Autobuses junto a cada estación (día laborable de referencia: el próximo miércoles) ----------
+const iMie = FECHAS.findIndex((d, i) => i >= 1 && d.getTime() > hoy.getTime() && d.getUTCDay() === 3);
+const aHora = (m) => `${String(Math.floor(m / 60) % 24).padStart(2, '0')}:${String(m % 60).padStart(2, '0')}`;
+const busesEstaciones = {}, fuentesBuses = [];
+function estacionesBuses(info) {
+  const cerca = new Map();
+  for (const [sid, p] of info.paradas) for (const e of ESTACIONES_APP) {
+    if (Math.abs(e[1] - p.la) > 0.005 || Math.abs(e[2] - p.lo) > 0.007) continue;
+    const m = metros([p.la, p.lo], [e[1], e[2]]);
+    if (m <= RADIO_EST) (cerca.get(sid) ?? cerca.set(sid, []).get(sid)).push({ est: e[0], m: Math.round(m), nombre: p.n });
+  }
+  if (!cerca.size) return;
+  const acu = new Map();
+  for (const v of info.viajes) {
+    if (info.dias.get(v.s)?.[iMie] !== '1') continue;
+    for (let i = 0; i < v.p.length; i += 2) for (const e of cerca.get(v.p[i]) ?? []) {
+      const k = `${e.est}|${v.r}`;
+      const x = acu.get(k) ?? acu.set(k, { est: e.est, r: v.r, parada: e.nombre, m: e.m, horas: [], carteles: [] }).get(k);
+      if (e.m < x.m) { x.m = e.m; x.parada = e.nombre; }
+      x.horas.push(v.p[i + 1]); if (v.h) x.carteles.push(v.h);
+    }
+  }
+  for (const x of acu.values()) {
+    const lin = info.lineas.get(x.r) ?? [x.r, '', 3];
+    if (lin[2] !== 3 && lin[2] !== 0 && lin[2] < 700) continue; // solo bus y tranvía
+    const horas = [...new Set(x.horas)].sort((a, b) => a - b);
+    const cuenta = new Map(); for (const c of x.carteles) cuenta.set(c, (cuenta.get(c) ?? 0) + 1);
+    const nombre = info.largos.get(x.r) || [...cuenta].sort((a, b) => b[1] - a[1])[0]?.[0] || '';
+    const texto = `${nombre} ${[...cuenta.keys()].join(' ')}`;
+    (busesEstaciones[x.est] ??= []).push({
+      linea: lin[0], nombre, ...(lin[1] ? { operador: lin[1] } : {}), parada: x.parada, m: x.m, viajes: horas.length,
+      cada: horas.length > 1 ? Math.round((horas.at(-1) - horas[0]) / (horas.length - 1)) : null,
+      primero: horas.length ? aHora(horas[0]) : null, ultimo: horas.length ? aHora(horas.at(-1)) : null,
+      destinos: Object.keys(DESTINOS).filter((d) => DESTINOS[d].test(texto)),
+    });
+  }
+  fuentesBuses.push(info.f.p);
 }
 
 // ---------- Principal ----------
@@ -209,6 +258,7 @@ for (const f of fuentes) {
     for (const p of info.paradas.values()) b = b ? [Math.min(b[0], p.la), Math.min(b[1], p.lo), Math.max(b[2], p.la), Math.max(b[3], p.lo)] : [p.la, p.lo, p.la, p.lo];
     for (const l of info.lineas.values()) tipos.add(l[2]);
     Object.assign(e, { b, tipos: [...tipos], fin: info.fin, viajes: info.viajes.length, ...(info.antiguo ? { antiguo: info.antiguo } : {}) });
+    if (iMie >= 0) estacionesBuses(info);
     // Sin conexión: la fuente entera
     const entera = JSON.stringify(construir(info, info.viajes, DIAS_F));
     if (entera.length <= MAX_F) { writeFileSync(join(SITIO, 'f', `${f.id}.json`), entera); e.bytes = entera.length; } else e.grande = entera.length;
@@ -247,6 +297,8 @@ for (const n of readdirSync(join(TMP, 'celdas'))) {
   celdas.push([c, statSync(join(SITIO, 't', `${c}.json`)).size]);
 }
 indice.celdas = Object.fromEntries(celdas);
+for (const k of Object.keys(busesEstaciones)) busesEstaciones[k] = busesEstaciones[k].sort((a, b) => b.destinos.length - a.destinos.length || b.viajes - a.viajes).slice(0, 12);
+writeFileSync(join(SITIO, 'estaciones-buses.json'), JSON.stringify({ fecha: iso(hoy), fuentes: fuentesBuses, estaciones: busesEstaciones }));
 writeFileSync(join(SITIO, 'indice.json'), JSON.stringify(indice));
 writeFileSync(join(SITIO, '.nojekyll'), '');
 const total = celdas.reduce((a, x) => a + x[1], 0) + indice.fuentes.reduce((a, x) => a + (x.bytes ?? 0), 0);
