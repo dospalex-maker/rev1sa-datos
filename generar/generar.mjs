@@ -87,7 +87,7 @@ async function bajar(f, destino) {
 // ---------- Paquete (mismo formato que PaqueteBuses de la app) ----------
 function construir(info, viajes, nDias) {
   const pq = { id: `mdb-${info.f.id}`, nombre: info.f.p, tipo: info.f.m ? 'urbano' : info.f.c === 'Estatales' ? 'nacional' : 'ccaa', fecha: iso(hoy), base: BASE,
-    paradas: [], lineas: [], dias: [], viajes: [], ...(info.fin ? { fin: info.fin } : {}), ...(info.f.m ? { municipio: info.f.m } : {}) };
+    paradas: [], lineas: [], dias: [], viajes: [], ...(info.antiguo ? { antiguo: info.antiguo } : info.fin ? { fin: info.fin } : {}), ...(info.f.m ? { municipio: info.f.m } : {}) };
   const iP = new Map(), iL = new Map(), iD = new Map(), vistos = new Set();
   for (const v of viajes) {
     const dias = info.dias.get(v.s).slice(0, nDias);
@@ -122,16 +122,33 @@ async function procesar(f, dir) {
   const cal = await todas(join(dir, 'calendar.txt')), exc = await todas(join(dir, 'calendar_dates.txt'));
   const porId = new Map(cal.map((c) => [c.service_id, c])), ex = new Map();
   for (const e of exc) ex.set(`${e.service_id}|${e.date}`, e.exception_type);
+  const ids = [...new Set([...porId.keys(), ...exc.map((e) => e.service_id)])];
+  const activo = (id, d) => {
+    const c = porId.get(id), y = iso(d).replace(/-/g, '');
+    let on = !!c && c[SEM[d.getUTCDay()]] === '1' && c.start_date <= y && c.end_date >= y;
+    const e = ex.get(`${id}|${y}`); if (e === '1') on = true; else if (e === '2') on = false;
+    return on;
+  };
   const dias = new Map();
-  for (const id of new Set([...porId.keys(), ...exc.map((e) => e.service_id)])) {
-    const c = porId.get(id); let s = '';
-    for (const d of FECHAS) {
-      const y = iso(d).replace(/-/g, '');
-      let on = !!c && c[SEM[d.getUTCDay()]] === '1' && c.start_date <= y && c.end_date >= y;
-      const e = ex.get(`${id}|${y}`); if (e === '1') on = true; else if (e === '2') on = false;
-      s += on ? '1' : '0';
+  for (const id of ids) dias.set(id, FECHAS.map((d) => (activo(id, d) ? '1' : '0')).join(''));
+  // Caducada (ningún servicio en los 70 días): a falta de datos nuevos se reutiliza su última semana con servicio,
+  // repetida por día de la semana sobre las fechas actuales (Alex, 10-11). Va marcada como «antiguo».
+  let antiguo;
+  if (ids.length && ![...dias.values()].some((x) => x.includes('1'))) {
+    const fechas = [...cal.flatMap((c) => [c.end_date]), ...exc.filter((e) => e.exception_type === '1').map((e) => e.date)].filter((x) => /^\d{8}$/.test(x ?? '')).sort();
+    const tope = fechas.pop();
+    if (tope) {
+      let d = new Date(Date.UTC(+tope.slice(0, 4), +tope.slice(4, 6) - 1, +tope.slice(6, 8), 12));
+      for (let n = 0; n < 400 && !ids.some((id) => activo(id, d)); n++) d = new Date(d.getTime() - 86_400_000);
+      if (ids.some((id) => activo(id, d))) {
+        antiguo = iso(d);
+        const semana = Array.from({ length: 7 }, (_, i) => new Date(d.getTime() - i * 86_400_000));
+        for (const id of ids) {
+          const porDia = new Map(semana.map((x) => [x.getUTCDay(), activo(id, x)]));
+          dias.set(id, FECHAS.map((x) => (porDia.get(x.getUTCDay()) ? '1' : '0')).join(''));
+        }
+      }
     }
-    dias.set(id, s);
   }
   const finY = [...cal.map((c) => c.end_date), ...exc.filter((e) => e.exception_type === '1').map((e) => e.date)].filter((x) => /^\d{8}$/.test(x ?? '')).sort().pop();
   // Líneas
@@ -165,7 +182,7 @@ async function procesar(f, dir) {
     console.log(`  · sin viajes: servicios ${dias.size} (activos en 70 días: ${act}), calendar ${cal.length} [${fechasCal[0] ?? '-'}…${fechasCal.at(-1) ?? '-'}], calendar_dates ${exc.length} [${fechasExc[0] ?? '-'}…${fechasExc.at(-1) ?? '-'}], viajes activos ${viajes.size}, paradas ${paradas.size}`);
   }
   viajes.clear();
-  return { f, paradas, dias, lineas, viajes: lista, fin: finY ? `${finY.slice(0, 4)}-${finY.slice(4, 6)}-${finY.slice(6, 8)}` : undefined };
+  return { f, paradas, dias, lineas, viajes: lista, antiguo, fin: finY ? `${finY.slice(0, 4)}-${finY.slice(4, 6)}-${finY.slice(6, 8)}` : undefined };
 }
 
 // ---------- Principal ----------
@@ -191,7 +208,7 @@ for (const f of fuentes) {
     let b = null; const tipos = new Set();
     for (const p of info.paradas.values()) b = b ? [Math.min(b[0], p.la), Math.min(b[1], p.lo), Math.max(b[2], p.la), Math.max(b[3], p.lo)] : [p.la, p.lo, p.la, p.lo];
     for (const l of info.lineas.values()) tipos.add(l[2]);
-    Object.assign(e, { b, tipos: [...tipos], fin: info.fin, viajes: info.viajes.length });
+    Object.assign(e, { b, tipos: [...tipos], fin: info.fin, viajes: info.viajes.length, ...(info.antiguo ? { antiguo: info.antiguo } : {}) });
     // Sin conexión: la fuente entera
     const entera = JSON.stringify(construir(info, info.viajes, DIAS_F));
     if (entera.length <= MAX_F) { writeFileSync(join(SITIO, 'f', `${f.id}.json`), entera); e.bytes = entera.length; } else e.grande = entera.length;
@@ -209,7 +226,7 @@ for (const f of fuentes) {
       appendFileSync(ruta, (existsSync(ruta) ? ',' : '') + JSON.stringify(pq));
       e.celdas++;
     }
-    console.log(`✓ ${f.id} ${f.p}: ${info.viajes.length} viajes, ${e.celdas} celdas, ${e.bytes ?? e.grande} B (${e.origen})`);
+    console.log(`✓ ${f.id} ${f.p}: ${info.viajes.length} viajes${info.antiguo ? ` (reutilizada: semana hasta ${info.antiguo})` : ''}, ${e.celdas} celdas, ${e.bytes ?? e.grande} B (${e.origen})`);
   } catch (err) { e.error = String(err.message).slice(0, 200); console.log(`✗ ${f.id} ${f.p}: ${e.error}`); }
   rmSync(dir, { recursive: true, force: true }); rmSync(zip, { force: true });
   indice.fuentes.push(e);
