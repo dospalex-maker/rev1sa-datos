@@ -1,0 +1,56 @@
+# Genera cada semana los horarios de transporte público de España para Rev1sa y los publica en GitHub Pages.
+# Repo público: GitHub Actions es gratis y sin límite de minutos. La clave del NAP va en el secreto NAP_API_KEY
+# (Settings → Secrets and variables → Actions); nunca en el código ni en la app.
+name: Generar horarios
+
+on:
+  schedule:
+    - cron: '17 2 * * 1'   # lunes 02:17 UTC
+  workflow_dispatch:
+    inputs:
+      ids:
+        description: 'Solo estas fuentes (ids separados por comas; vacío = todas)'
+        required: false
+        default: ''
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: generar
+  cancel-in-progress: false
+
+jobs:
+  generar:
+    runs-on: ubuntu-latest
+    timeout-minutes: 300
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: lts/*
+      - name: Catálogo de Mobility Database
+        run: |
+          git clone --depth 1 https://github.com/MobilityData/mobility-database-catalogs /tmp/mdbc
+          python3 generar/catalogo.py /tmp/mdbc
+      - name: Generar
+        env:
+          NAP_API_KEY: ${{ secrets.NAP_API_KEY }}
+        run: node --max-old-space-size=6144 generar/generar.mjs "${{ inputs.ids }}" | tee resumen.txt
+      - name: Resumen
+        run: tail -1 resumen.txt >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: sitio
+
+  publicar:
+    needs: generar
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.d.outputs.page_url }}
+    steps:
+      - id: d
+        uses: actions/deploy-pages@v4
