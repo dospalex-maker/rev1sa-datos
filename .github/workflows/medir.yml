@@ -1,7 +1,7 @@
 # Solo informe (no publica): cuánto cambian los horarios de Galicia y cuánto pesarían 7 / 30 días o 1 mes en días tipo.
 name: Medir horarios Galicia
 on:
-  workflow_dispatch: {}
+  workflow_dispatch:
 permissions:
   contents: read
 jobs:
@@ -22,7 +22,8 @@ jobs:
           NAP_API_KEY: ${{ secrets.NAP_API_KEY }}
         run: node --max-old-space-size=6144 generar/medir.mjs
       - name: Resumen
-        run: { echo '```'; cat medida.txt; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+        run: |
+          { echo '```'; cat medida.txt; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
       - uses: actions/upload-artifact@v4
         with:
           name: medida
