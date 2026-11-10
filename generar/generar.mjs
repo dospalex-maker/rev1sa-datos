@@ -158,6 +158,12 @@ async function procesar(f, dir) {
     v.t.sort((x, y) => x[0] - y[0]);
     lista.push({ r: v.r, s: v.s, p: v.t.flatMap((x) => [x[1], x[2]]) });
   }
+  if (!lista.length) {
+    const act = [...dias.values()].filter((x) => x.includes('1')).length;
+    const fechasCal = cal.flatMap((c) => [c.start_date, c.end_date]).filter(Boolean).sort();
+    const fechasExc = exc.map((e) => e.date).filter(Boolean).sort();
+    console.log(`  · sin viajes: servicios ${dias.size} (activos en 70 días: ${act}), calendar ${cal.length} [${fechasCal[0] ?? '-'}…${fechasCal.at(-1) ?? '-'}], calendar_dates ${exc.length} [${fechasExc[0] ?? '-'}…${fechasExc.at(-1) ?? '-'}], viajes activos ${viajes.size}, paradas ${paradas.size}`);
+  }
   viajes.clear();
   return { f, paradas, dias, lineas, viajes: lista, fin: finY ? `${finY.slice(0, 4)}-${finY.slice(4, 6)}-${finY.slice(6, 8)}` : undefined };
 }

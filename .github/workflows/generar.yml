@@ -12,6 +12,10 @@ on:
         description: 'Solo estas fuentes (ids separados por comas; vacío = todas)'
         required: false
         default: ''
+      publicar:
+        description: 'Publicar en GitHub Pages (desmarcar para solo probar)'
+        type: boolean
+        default: true
 
 permissions:
   contents: read
@@ -47,6 +51,7 @@ jobs:
 
   publicar:
     needs: generar
+    if: github.event_name == 'schedule' || inputs.publicar
     runs-on: ubuntu-latest
     environment:
       name: github-pages
