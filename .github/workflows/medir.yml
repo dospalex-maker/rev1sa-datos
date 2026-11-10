@@ -1,0 +1,29 @@
+# Solo informe (no publica): cuánto cambian los horarios de Galicia y cuánto pesarían 7 / 30 días o 1 mes en días tipo.
+name: Medir horarios Galicia
+on:
+  workflow_dispatch: {}
+permissions:
+  contents: read
+jobs:
+  medir:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: lts/*
+      - name: Catálogo
+        run: |
+          git clone --depth 1 https://github.com/MobilityData/mobility-database-catalogs /tmp/mdbc
+          python3 generar/catalogo.py /tmp/mdbc
+      - name: Medir
+        env:
+          NAP_API_KEY: ${{ secrets.NAP_API_KEY }}
+        run: node --max-old-space-size=6144 generar/medir.mjs
+      - name: Resumen
+        run: { echo '```'; cat medida.txt; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: medida
+          path: medida.txt
