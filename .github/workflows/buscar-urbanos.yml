@@ -1,0 +1,17 @@
+# Solo informe: buscar GTFS de buses urbanos de Galicia (Vigo, Santiago, Lugo, Ferrol, Pontevedra…).
+name: Buscar urbanos Galicia
+on:
+  workflow_dispatch:
+jobs:
+  buscar:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Buscar
+        env:
+          NAP_API_KEY: ${{ secrets.NAP_API_KEY }}
+        run: |
+          set +e
+          echo "== Vigo CKAN =="; curl -sS -m 60 'https://datos-ckan.vigo.org/api/3/action/package_search?q=gtfs&rows=20' | python3 -c "import json,sys;d=json.load(sys.stdin);[print(p['name'],'|',r.get('url')) for p in d['result']['results'] for r in p.get('resources',[])]" 2>&1 | head -30
+          echo "== Vigo CKAN vitrasa =="; curl -sS -m 60 'https://datos-ckan.vigo.org/api/3/action/package_search?q=vitrasa&rows=20' | python3 -c "import json,sys;d=json.load(sys.stdin);[print(p['name'],'|',r.get('format'),'|',r.get('url')) for p in d['result']['results'] for r in p.get('resources',[])]" 2>&1 | head -40
+          echo "== datos.gob.es gtfs galicia =="; for q in vitrasa santiago lugo ferrol pontevedra; do curl -sS -m 60 "https://datos.gob.es/apidata/catalog/dataset/title/$q?_pageSize=50" -H 'Accept: application/json' | python3 -c "import json,sys;d=json.load(sys.stdin);[print('$q','|',(i.get('title') if isinstance(i.get('title'),str) else str(i.get('title'))[:120]),'|',str(i.get('distribution'))[:300]) for i in d['result']['items'] if 'gtfs' in json.dumps(i).lower() or 'autob' in json.dumps(i).lower()]" 2>&1 | head -10; done
+          echo "== NAP =="; for U in "https://nap.transportes.gob.es/api/Fichero/GetList" "https://nap.transportes.gob.es/api/Fichero/Filter" "https://nap.transportes.gob.es/api/Conjunto/GetList"; do echo "-- $U"; curl -sS -m 60 -H "ApiKey: $NAP_API_KEY" "$U" | head -c 600; echo; curl -sS -m 60 -X POST -H "ApiKey: $NAP_API_KEY" -H 'Content-Type: application/json' -d '{}' "$U" | head -c 600; echo; done
