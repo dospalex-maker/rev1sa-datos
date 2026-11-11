@@ -9,12 +9,25 @@ jobs:
       - name: Overpass
         run: |
           Q='[out:json][timeout:170];(relation["type"="route"]["ref"~"^XG",i](41.7,-9.4,43.9,-6.6);relation["type"="route_master"]["ref"~"^XG",i](41.7,-9.4,43.9,-6.6););out tags;'
-          for U in https://overpass-api.de/api/interpreter https://overpass.kumi.systems/api/interpreter https://maps.mail.ru/osm/tools/overpass/api/interpreter; do
-            curl -sS -m 180 -A 'rev1sa-datos (GitHub Actions)' --data-urlencode "data=$Q" "$U" -o osm.json || true
-            head -c 200 osm.json; echo
-            if head -c 1 osm.json | grep -q '{'; then break; fi
-            sleep 20
+          ok=0
+          for vuelta in 1 2; do
+            for U in https://overpass-api.de/api/interpreter https://overpass.kumi.systems/api/interpreter https://maps.mail.ru/osm/tools/overpass/api/interpreter; do
+              echo "== Vuelta $vuelta: $U"
+              rm -f osm.json
+              code=$(curl -sS -m 180 -A 'rev1sa-datos (GitHub Actions)' -w '%{http_code}' --data-urlencode "data=$Q" "$U" -o osm.json || echo 000)
+              echo "HTTP $code"
+              # Válido solo si es JSON con "elements" y sin "remark" de error de Overpass
+              if [ "$code" = "200" ] && python3 -c "import json,sys; d=json.load(open('osm.json')); sys.exit(0 if 'elements' in d and 'error' not in (d.get('remark') or '').lower() else 1)" 2>/dev/null; then
+                ok=1; break 2
+              fi
+              echo "Respuesta no válida:"; head -c 300 osm.json 2>/dev/null; echo
+              sleep 30
+            done
           done
+          if [ "$ok" != 1 ]; then
+            echo "::error::Ningún servidor Overpass devolvió datos válidos (saturados). Relanza más tarde."
+            exit 1
+          fi
           python3 - <<'P' > operadores.txt
           import json,re,collections
           d=json.load(open('osm.json'))
