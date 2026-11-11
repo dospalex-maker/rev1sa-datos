@@ -40,6 +40,12 @@ COBERTURA = {
 NUNCA = {1914, 2727}
 norm = lambda x: re.sub(r'[^a-z0-9]', '', x.lower())
 
+EXTRA = [
+    # Vitrasa (bus urbano de Vigo) · Concello de Vigo, datos abiertos (datos-ckan.vigo.org «gtfs-vitrasa»)
+    {'id': 90001, 'p': 'Vitrasa', 'c': 'Galicia', 'm': 'Vigo', 'u': 'https://datos.vigo.org/data/transporte/gtfs_vigo.zip', 'b': [42.15, -8.83, 42.28, -8.62]},
+]
+
+
 def main(raiz):
     out = []
     todas = [json.load(open(f, encoding='utf-8')) for f in sorted(glob.glob(f'{raiz}/catalogs/sources/gtfs/schedule/es-*.json'))]
@@ -69,7 +75,10 @@ def main(raiz):
         if i in COBERTURA: e['z'] = COBERTURA[i]
         if vieja: e['v'] = 1
         out.append(e)
-    json.dump({'fuente': 'Mobility Database (CC0)', 'fecha': datetime.date.today().isoformat(), 'fuentes': out},
+    # Fuentes que no están en el catálogo (urbanos encontrados a mano; id ≥ 90000).
+    for e in EXTRA:
+        if not any(o['u'] == e['u'] for o in out): out.append(dict(e))
+    json.dump({'fuente': 'Mobility Database (CC0) + datos abiertos municipales', 'fecha': datetime.date.today().isoformat(), 'fuentes': out},
               open('generar/fuentes.json', 'w', encoding='utf-8'), ensure_ascii=False, separators=(',', ':'))
     print(len(out), 'fuentes')
 
