@@ -1,0 +1,28 @@
+# Solo informe: operador (empresa) de cada contrato XG de la Xunta según OpenStreetMap.
+name: Operadores XG (OSM)
+on:
+  workflow_dispatch:
+jobs:
+  osm:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Overpass
+        run: |
+          curl -sS -m 180 --data-urlencode 'data=[out:json][timeout:170];(relation["type"="route"]["ref"~"^XG",i](41.7,-9.4,43.9,-6.6);relation["type"="route_master"]["ref"~"^XG",i](41.7,-9.4,43.9,-6.6);relation["type"="network"]["name"~"XG",i];);out tags;' https://overpass-api.de/api/interpreter -o osm.json
+          python3 - <<'P' > operadores.txt
+          import json,re,collections
+          d=json.load(open('osm.json'))
+          m=collections.defaultdict(collections.Counter)
+          for e in d['elements']:
+              t=e.get('tags',{})
+              ref=(t.get('ref') or '')+' '+(t.get('network') or '')+' '+(t.get('name') or '')
+              k=re.search(r'XG-?\s?(\d{3})',ref,re.I)
+              if not k: continue
+              op=t.get('operator') or ''
+              m['XG'+k.group(1)][op]+=1
+          for k in sorted(m): print(k, '|', ' ; '.join(f'{o} ({n})' for o,n in m[k].most_common()))
+          P
+          cat operadores.txt
+          { echo '```'; cat operadores.txt; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@v4
+        with: { name: operadores, path: operadores.txt }
