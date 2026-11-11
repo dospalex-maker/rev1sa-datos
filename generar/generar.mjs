@@ -7,6 +7,8 @@
  *      indice.json            fuentes, zona real (caja de sus paradas), tipos, peso y fechas
  *      t/<fila>_<col>.json    CON CONEXIÓN: celda de 0,25° con todos los viajes que paran en ella (15 días), de todas las fuentes
  *      f/<id>.json            SIN CONEXIÓN (opcional): la fuente entera (70 días)
+ *      g/galicia.json         SIN CONEXIÓN, «Toda Galicia» (2.1): semana tipo (lunes a domingo de esta semana) de todo lo que
+ *                             toca Galicia; la app la repite cada semana (festivo = domingo). Medido: ~13 MB (3,4 comprimido).
  * Uso: node --max-old-space-size=6144 generar/generar.mjs [id,id,…]
  */
 import { execFileSync } from 'node:child_process';
@@ -14,7 +16,7 @@ import { createReadStream, existsSync, mkdirSync, readFileSync, readdirSync, rmS
 import { createInterface } from 'node:readline';
 import { join } from 'node:path';
 
-const CELDA = 0.25, DIAS_F = 70, DIAS_T = 15, RADIO_EST = 400, MAX_F = 90_000_000;
+const CELDA = 0.25, DIAS_F = 70, DIAS_T = 14, RADIO_EST = 400, MAX_F = 90_000_000;
 const SITIO = 'sitio', TMP = '/tmp/rev1sa-datos';
 const CLAVE_NAP = process.env.NAP_API_KEY || '';
 const fuentes = JSON.parse(readFileSync('generar/fuentes.json', 'utf8')).fuentes;
@@ -236,7 +238,10 @@ function estacionesBuses(info) {
 
 // ---------- Principal ----------
 rmSync(SITIO, { recursive: true, force: true });
-mkdirSync(join(SITIO, 't'), { recursive: true }); mkdirSync(join(SITIO, 'f'), { recursive: true });
+mkdirSync(join(SITIO, 't'), { recursive: true }); mkdirSync(join(SITIO, 'f'), { recursive: true }); mkdirSync(join(SITIO, 'g'), { recursive: true });
+const CAJA_GAL = [41.75, -9.4, 43.9, -6.65];
+const enGalicia = (p) => p && p.la >= CAJA_GAL[0] && p.la <= CAJA_GAL[2] && p.lo >= CAJA_GAL[1] && p.lo <= CAJA_GAL[3];
+const galicia = [];
 rmSync(join(TMP, 'celdas'), { recursive: true, force: true }); mkdirSync(join(TMP, 'celdas'), { recursive: true });
 const indice = { generado: new Date().toISOString(), base: BASE, celda: CELDA, diasConexion: DIAS_T, diasSinConexion: DIAS_F, fuentes: [] };
 
@@ -259,6 +264,11 @@ for (const f of fuentes) {
     for (const l of info.lineas.values()) tipos.add(l[2]);
     Object.assign(e, { b, tipos: [...tipos], fin: info.fin, viajes: info.viajes.length, ...(info.antiguo ? { antiguo: info.antiguo } : {}) });
     if (iMie >= 0) estacionesBuses(info);
+    // 2.1 · «Toda Galicia»: semana tipo de los viajes que paran en Galicia (de fuentes gallegas y estatales).
+    if (f.c === 'Galicia' || /Galicia/.test(f.z ?? '') || f.z === '*' || f.c === 'Estatales') {
+      const vg = info.viajes.filter((v) => { for (let i = 0; i < v.p.length; i += 2) if (enGalicia(info.paradas.get(v.p[i]))) return true; return false; });
+      if (vg.length) { const pq = construir(info, vg, 7); if (pq.viajes.length) galicia.push(pq); }
+    }
     // Sin conexión: la fuente entera
     const entera = JSON.stringify(construir(info, info.viajes, DIAS_F));
     if (entera.length <= MAX_F) { writeFileSync(join(SITIO, 'f', `${f.id}.json`), entera); e.bytes = entera.length; } else e.grande = entera.length;
@@ -297,6 +307,7 @@ for (const n of readdirSync(join(TMP, 'celdas'))) {
   celdas.push([c, statSync(join(SITIO, 't', `${c}.json`)).size]);
 }
 indice.celdas = Object.fromEntries(celdas);
+if (galicia.length) { const g = JSON.stringify(galicia); writeFileSync(join(SITIO, 'g', 'galicia.json'), g); indice.galicia = { bytes: g.length, base: BASE, fuentes: galicia.map((x) => x.nombre) }; console.log(`Galicia (semana tipo): ${galicia.length} fuentes, ${(g.length / 1e6).toFixed(1)} MB`); }
 for (const k of Object.keys(busesEstaciones)) busesEstaciones[k] = busesEstaciones[k].sort((a, b) => b.destinos.length - a.destinos.length || b.viajes - a.viajes).slice(0, 12);
 writeFileSync(join(SITIO, 'estaciones-buses.json'), JSON.stringify({ fecha: iso(hoy), fuentes: fuentesBuses, estaciones: busesEstaciones }));
 writeFileSync(join(SITIO, 'indice.json'), JSON.stringify(indice));
