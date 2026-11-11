@@ -8,7 +8,13 @@ jobs:
     steps:
       - name: Overpass
         run: |
-          curl -sS -m 180 --data-urlencode 'data=[out:json][timeout:170];(relation["type"="route"]["ref"~"^XG",i](41.7,-9.4,43.9,-6.6);relation["type"="route_master"]["ref"~"^XG",i](41.7,-9.4,43.9,-6.6);relation["type"="network"]["name"~"XG",i];);out tags;' https://overpass-api.de/api/interpreter -o osm.json
+          Q='[out:json][timeout:170];(relation["type"="route"]["ref"~"^XG",i](41.7,-9.4,43.9,-6.6);relation["type"="route_master"]["ref"~"^XG",i](41.7,-9.4,43.9,-6.6););out tags;'
+          for U in https://overpass-api.de/api/interpreter https://overpass.kumi.systems/api/interpreter https://maps.mail.ru/osm/tools/overpass/api/interpreter; do
+            curl -sS -m 180 -A 'rev1sa-datos (GitHub Actions)' --data-urlencode "data=$Q" "$U" -o osm.json || true
+            head -c 200 osm.json; echo
+            if head -c 1 osm.json | grep -q '{'; then break; fi
+            sleep 20
+          done
           python3 - <<'P' > operadores.txt
           import json,re,collections
           d=json.load(open('osm.json'))
